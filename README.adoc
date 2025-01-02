@@ -1,0 +1,258 @@
+= quarkus-openapi-bug
+
+This repository shows a bug with the OpenAPI schema generation.
+
+We have the schema and the API response for link:./src/main/java/quarkus/openapi/bug/UserResponse.java[`UserResponse.java`] defined in link:src/main/java/quarkus/openapi/bug/OpenApiDefinition.java[`OpenApiDefinition.java`].
+We have also defined the `Accept-Encoding` header as parameter:
+
+.Relevant parts of `OpenApiDefinition.java`
+[source,java]
+----
+...
+// @formatter:off
+@OpenAPIDefinition(
+    ...
+    components = @Components(
+        parameters = {
+            @Parameter(
+                name = HttpHeaders.ACCEPT_ENCODING,
+                in = ParameterIn.HEADER,
+                schema = @Schema(
+                    type = SchemaType.STRING,
+                    enumeration = {
+                        "gzip",
+                        "deflate",
+                    })),
+        },
+        schemas = {
+            ...
+            @Schema(
+                name = OpenApiDefinition.SCHEMA_USER_RESPONSE,
+                implementation = UserResponse.class),
+        },
+        ...
+        responses = {
+            @APIResponse(
+                name = OpenApiDefinition.RESPONSE_USER,
+                content = @Content(
+                    mediaType = MediaType.APPLICATION_JSON,
+                    schema = @Schema(ref = OpenApiDefinition.SCHEMA_USER_RESPONSE))),
+        }
+    )
+)
+// @formatter:on
+...
+----
+
+Both the parameter and the API response is used in link:./src/main/java/quarkus/openapi/bug/UserEndpoint.java[`UserEndpoint.java`]:
+
+.Relevant parts of `UserEndpoint.java`
+[source,java]
+----
+...
+@Path("users")
+@Tag(name = "Users")
+public class UserEndpoint {
+  @POST
+  @Parameter(ref = HttpHeaders.ACCEPT_ENCODING)
+  @APIResponse(ref = OpenApiDefinition.RESPONSE_USER, responseCode = "200")
+  public Uni<Response> post(
+      @RequestBody(ref = OpenApiDefinition.REQUEST_USER) UserRequest request) {
+    return Uni.createFrom().item(() -> Response.ok(UserResponse.from(request)).build());
+  }
+}
+
+----
+
+If we look at the generated OpenAPI specification, we see the following:
+
+.Generated OpenAPI specification
+[source,yml]
+----
+---
+openapi: 3.1.0
+info:
+  title: quarkus-openapi-bug
+  version: 999-SNAPSHOT
+components:
+  parameters:
+    Accept-Encoding:
+      in: header
+      name: Accept-Encoding
+      schema:
+        type: string
+        enum:
+        - gzip
+        - deflate
+  requestBodies:
+    User Request:
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/User Request"
+      required: true
+  responses:
+    User Response:
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/User Response"
+  schemas:
+    User Request: <1>
+      type: object
+      properties:
+        name:
+          type: string
+    User Response:
+      type: object
+      properties:
+        name:
+          type: string
+    UserRequest: <2>
+      type: object
+      properties:
+        name:
+          type: string
+paths:
+  /user:
+    post:
+      parameters:
+      - $ref: "#/components/parameters/Accept-Encoding"
+      requestBody:
+        $ref: "#/components/requestBodies/User Request"
+      responses:
+        "200":
+          description: OK
+          $ref: "#/components/responses/User Response"
+      summary: Post
+      tags:
+      - Endpoint
+----
+<1> This is the request we defined explicitly.
+<2> This API request was automagically created and is unused.
+
+TIP: To get the specification, we can start the application (`./mvnw clean quarkus:dev`) and then download it from link:http://localhost:8080/q/openapi.yml[`http://localhost:8080/q/openapi.yml`]
+
+When we remove the `@Parameter`-annotation from link:./src/main/java/quarkus/openapi/bug/UserResponse.java[`UserEndpoint`]:
+
+.Patch to remove the `@Parameter` annotation
+[source,diff]
+----
+Subject: [PATCH] Remove Parameter annotation from UserEndpoint
+---
+Index: src/main/java/quarkus/openapi/bug/UserEndpoint.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/src/main/java/quarkus/openapi/bug/UserEndpoint.java b/src/main/java/quarkus/openapi/bug/UserEndpoint.java
+--- a/src/main/java/quarkus/openapi/bug/UserEndpoint.java	(revision 34168613474e8845c317b1398dc80b40bca31e32)
++++ b/src/main/java/quarkus/openapi/bug/UserEndpoint.java	(date 1735834074199)
+@@ -2,11 +2,9 @@
+
+ import jakarta.ws.rs.POST;
+ import jakarta.ws.rs.Path;
+-import jakarta.ws.rs.core.HttpHeaders;
+ import jakarta.ws.rs.core.Response;
+
+ import io.smallrye.mutiny.Uni;
+-import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
+ import org.eclipse.microprofile.openapi.annotations.parameters.RequestBody;
+ import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
+ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
+@@ -15,7 +13,6 @@
+ @Tag(name = "Users")
+ public class UserEndpoint {
+   @POST
+-  @Parameter(ref = HttpHeaders.ACCEPT_ENCODING)
+   @APIResponse(ref = OpenApiDefinition.RESPONSE_USER, responseCode = "200")
+   public Uni<Response> post(
+       @RequestBody(ref = OpenApiDefinition.REQUEST_USER) UserRequest request) {
+
+----
+
+... and regenerate the specification, we see that the atomagically generated schema is gone:
+
+.Regenerated OpenAPI specification
+[source,yml]
+----
+---
+openapi: 3.1.0
+info:
+  title: quarkus-openapi-bug
+  version: 999-SNAPSHOT
+components:
+  parameters:
+    Accept-Encoding:
+      in: header
+      name: Accept-Encoding
+      schema:
+        type: string
+        enum:
+        - gzip
+        - deflate
+  requestBodies:
+    User Request:
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/User Request"
+      required: true
+  responses:
+    User Response:
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/User Response"
+  schemas:
+    User Request:
+      type: object
+      properties:
+        name:
+          type: string
+    User Response:
+      type: object
+      properties:
+        name:
+          type: string
+tags:
+- name: Users
+paths:
+  /users:
+    post:
+      tags:
+      - Users
+      requestBody:
+        $ref: "#/components/requestBodies/User Request"
+      responses:
+        "200":
+          description: OK
+          $ref: "#/components/responses/User Response"
+      summary: Post
+----
+
+
+== Contributors ✨
+
+Thanks goes to these wonderful people (https://allcontributors.org/docs/en/emoji-key[emoji key]):
+
+++++
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://turing85.github.io"><img src="https://avatars.githubusercontent.com/u/32584495?v=4?s=100" width="100px;" alt="Marco Bungart"/><br /><sub><b>Marco Bungart</b></sub></a><br /><a href="#code-turing85" title="Code">💻</a> <a href="#maintenance-turing85" title="Maintenance">🚧</a> <a href="#doc-turing85" title="Documentation">📖</a></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+
+<!-- ALL-CONTRIBUTORS-LIST:END -->
+++++
+
+This project follows the https://github.com/all-contributors/all-contributors[all-contributors] specification.
+Contributions of any kind welcome!
